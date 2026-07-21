@@ -184,3 +184,327 @@ The ring-buffer reader can continue processing events independently.
 Next question: why is `context.Context` useful here instead of leaving the goroutine running forever?
 
 Correct: **it allows graceful shutdown**.
+
+---
+## Observability hooks
+
+For observability, the main hook families are:
+
+```text
+tracepoints
+kprobes/kretprobes
+uprobes/uretprobes
+fentry/fexit
+USDT
+```
+
+A kprobe can attach to many kernel functions even when no suitable tracepoint exists.
+
+Use this decision rule:
+
+```text
+Prefer tracepoint when it exposes what you need.
+Use kprobe when you need an internal function or extra visibility.
+```
+
+Example: if no tracepoint exposes a specific filesystem helper, a kprobe may be the only practical hook.
+
+### User-space probes
+
+#### uprobe/uretprobe
+
+```text
+uprobe     → user-space function entry
+uretprobe  → user-space function return
+```
+
+You use them for binaries and shared libraries, such as tracing a Go function, `libc`, or OpenSSL.
+
+> Go function symbol exists in the compiled binary
+> for go binary `go tool nm ./opener | grep 'functionName'`
+
+- Why might a function not appear as a usable symbol even though it exists in the source code
+
+Two other common reasons in Go are:
+
+* the compiler **inlined** the function into its callers;
+* compiler/linker optimization changed or removed the standalone function body.
+
+For an easier uprobe target during learning, build with optimizations and inlining disabled:
+
+```bash
+go build -gcflags="all=-N -l" -o opener .
+```
+
+Then inspect symbols again:
+
+```bash
+go tool nm ./opener | grep 'main\.'
+```
+
+-N → no optimizations
+-l → no inlining
+
+#### USDT probes
+
+**named USDT probe** is generally more stable.
+
+A uprobe depends on implementation details such as function names and binary layout. A USDT probe is an intentional observability interface exposed by the application.
+
+```text
+uprobe → attach to implementation
+USDT   → attach to declared instrumentation point
+```
+A USDT probe is usually the better long-term contract when the application exposes one.
+
+#### fentry/fexit
+
+Compared with kprobes, fentry/fexit attach through kernel BTF metadata and are generally more efficient and type-aware.
+
+A key advantage over kretprobes is that fexit can often access both the function arguments and return value using BTF type information.
+
+
+### Kernel metadata
+
+kernel metadata enables that type awareness, it provides type metadata for kernel structs, function parameters, and return values. fentry/fexit and CO-RE use it to understand kernel types more reliably.
+
+**CO-RE** — Compile Once, Run Everywhere.
+
+It uses BTF so the loader can relocate struct field offsets for the target kernel.
+
+```text
+BTF  = describes kernel types
+CO-RE = adapts your compiled eBPF program to those types
+```
+
+**`vmlinux.h`**.
+
+It contains C type definitions generated from the running kernel’s BTF data. A common command is:
+
+```bash
+bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+```
+
+A CO-RE program then typically includes:
+
+```c
+#include "vmlinux.h"
+#include <bpf/bpf_core_read.h>
+#include <bpf/bpf_helpers.h>
+```
+
+Why should a CO-RE program avoid including ordinary kernel headers alongside `vmlinux.h`?
+
+Partly, but the main issue is **duplicate or conflicting type definitions**.
+
+`vmlinux.h` already contains kernel type definitions derived from BTF. Including ordinary kernel headers too can redefine structs, enums, or typedefs and cause compile errors or mismatched layouts.
+
+Rule:
+
+```text
+vmlinux.h → kernel types
+libbpf headers → eBPF helpers and CO-RE macros
+```
+
+
+- `BPF_CORE_READ()`.
+
+Example:
+
+```c
+struct task_struct *task =
+    (struct task_struct *)bpf_get_current_task_btf();
+
+__u32 tgid = BPF_CORE_READ(task, tgid);
+```
+
+`BPF_CORE_READ()` follows typed kernel fields using CO-RE relocations. `bpf_map_lookup_elem()` reads values from a BPF map instead.
+
+Correct: `bpf_get_current_task_btf()`.
+
+It returns a BTF-aware pointer to the current kernel `task_struct`, which you can then inspect with `BPF_CORE_READ()`.
+
+```c
+struct task_struct *task = bpf_get_current_task_btf();
+__u32 tgid = BPF_CORE_READ(task, tgid);
+```
+
+
+* `pid` identifies a specific thread.
+* `tgid` identifies the thread group, which corresponds to the process ID users usually see.
+
+For a single-threaded process, `pid == tgid`. For a multithreaded process, every thread has its own `pid`, but they share the same `tgid`.
+
+`pid` means the kernel thread ID, so it is the safer correlation key.
+
+In eBPF, this is commonly extracted as:
+
+```c
+__u64 pid_tgid = bpf_get_current_pid_tgid();
+
+__u32 tid  = (__u32)pid_tgid;
+__u32 tgid = pid_tgid >> 32;
+```
+
+Use `tid` to pair entry and exit. Use `tgid` to group events by process. Using `tgid` could cause concurrent threads in the same process to overwrite each other’s start timestamp.
+
+```text
+tid  → correlate one thread’s entry and exit
+tgid → group or display the whole process
+```
+
+- for a metric like “slow opens per process,” would you group by `tid` or `tgid`?
+Correct: **`tgid`**.
+
+That groups all threads belonging to the same process into one metric.
+
+```text
+tid  → event correlation
+tgid → per-process aggregation
+```
+
+- for “slow opens per thread,” which key would you use?
+Correct: **`tid`**.
+
+You now have the key distinction:
+
+```text
+Entry/exit correlation → tid
+Per-thread metrics      → tid
+Per-process metrics     → tgid
+User-visible process ID → tgid
+```
+
+### Fallbacks
+bpf_core_field_exists() lets the loaded program adapt to the target kernel’s BTF. If a field is missing, use a **fallback path**.
+
+```c
+if (bpf_core_field_exists(task->some_field)) {
+    value = BPF_CORE_READ(task, some_field);
+} else {
+    value = default_value;
+}
+```
+
+That preserves compatibility across kernels.
+
+**a default value can be correct**, but it depends on meaning.
+
+Use a default when “unknown” can be represented safely, such as:
+
+```c
+value = 0;
+```
+
+But if `0` is also a valid real value, add a validity flag:
+
+```c
+struct event {
+    __u64 value;
+    __u8 value_valid;
+};
+```
+
+Then user space can distinguish:
+
+```text
+value_valid = 1 → real value
+value_valid = 0 → field unavailable
+```
+
+ A validity flag prevents **ambiguity**: without it, Go cannot tell whether `0` is the real kernel value or merely the fallback because the field was unavailable.
+
+```text
+value = 0, valid = 1 → genuine zero
+value = 0, valid = 0 → unavailable
+```
+
+**`uint8`** is safer for matching a C `__u8` field exactly.
+
+```go
+type event struct {
+	Value      uint64
+	ValueValid uint8
+}
+```
+
+Then in Go:
+
+```go
+if e.ValueValid != 0 {
+	// value is available
+}
+```
+
+> [!IMPORTANT] must match between the C and Go structs? `Types` and `field` **order** must match exactly. Otherwise, Go will misinterpret the binary layout of the event data. Field sizes, alignment, padding.
+
+👀 Put the largest field first:
+
+```c
+struct event {
+    __u64 value;
+    __u8 valid;
+};
+```
+
+This removes the padding **between** fields, though the struct may still have trailing padding for alignment.
+
+> 🫡 **largest fields first** `__u64 → __u32 → __u16 → __u8 → arrays`
+
+
+**whole struct’s size is rounded up to satisfy its strictest alignment requirement**.
+
+Example:
+
+```c
+struct event {
+    __u64 value; // 8 bytes
+    __u8 valid;  // 1 byte
+};
+```
+
+The fields use 9 bytes, but the struct may become **16 bytes** so arrays of `struct event` keep each `value` aligned to 8 bytes.
+
+* Tool or Go function could you use to verify the actual size of the matching Go struct?
+
+Use `unsafe.Sizeof()`:
+
+```go
+fmt.Println(unsafe.Sizeof(event{}))
+```
+
+For field offsets, use `unsafe.Offsetof()`:
+
+```go
+var e event
+
+fmt.Println(unsafe.Offsetof(e.Value))
+fmt.Println(unsafe.Offsetof(e.Valid))
+```
+
+These help verify that the Go layout matches the C struct.
+
+Inspect alignment and padding.
+
+A reliable check is:
+
+```go
+fmt.Println("size:", unsafe.Sizeof(event{}))
+fmt.Println("Value offset:", unsafe.Offsetof(event{}.Value))
+fmt.Println("Valid offset:", unsafe.Offsetof(event{}.Valid))
+```
+
+Then compare those offsets with the C layout.
+
+**Unit Test**: A useful unit test is verifying the decoded event structure’s size and field offsets.
+
+For example, test that:
+
+```text
+LatencyNs starts at the expected offset
+Comm has exactly 16 bytes
+Filename has exactly 256 bytes
+The total event size matches the generated C layout
+```
+
+You can also test pure Go helpers such as `cString()` and latency conversion without loading eBPF.
