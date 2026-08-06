@@ -1,3 +1,9 @@
+# NOTES
+
+## EBPF functionality
+
+### Latency measurement
+
 Use:
 
 ```c
@@ -20,7 +26,7 @@ latency_ns = bpf_ktime_get_ns() - *start;
 ```
 
 
----
+### Map cleanup
 
 
 ```c
@@ -36,8 +42,9 @@ Now combine the exit-side steps in order:
 3. submit the event
 4. delete the map entry
 
----
-Correct: `bpf_ringbuf_submit()`.
+### Ring buffer submission
+
+`bpf_ringbuf_submit()`
 
 Typical pattern:
 
@@ -51,10 +58,11 @@ e->latency_ns = bpf_ktime_get_ns() - *start_time;
 bpf_ringbuf_submit(e, 0);
 bpf_map_delete_elem(&starts, &tid);
 ```
-Exactly. bpf_ringbuf_reserve() asks for writable space in the ring buffer.
 
-If it returns NULL, there is no available space, so the event must be skipped.
-If it succeeds, you fill the reserved memory and call bpf_ringbuf_submit().
+bpf_ringbuf_reserve() asks for writable space in the ring buffer.
+
+If it **returns** NULL, there is no available space, so the event must be skipped.
+If it **succeeds**, you fill the reserved memory and call bpf_ringbuf_submit().
 
 >Next question: when reserve fails, should we still delete the tid entry from the starts map?
 
@@ -67,6 +75,10 @@ if (!e) {
     return 0;
 }
 ```
+
+---
+
+## Golang struct matching
 
 Now let’s connect this to Go. Suppose the C event contains:
 
@@ -81,7 +93,11 @@ What Go type should the matching field use: `uint32`, `uint64`, or `int64`?
 
 ---
 
-Correct. Filtering inside the eBPF program is usually cheaper because unwanted events never cross into user space.
+## Tips & tricks
+
+### filtering
+
+Filtering inside the eBPF program is usually cheaper because unwanted events never cross into user space.
 
 At syscall exit:
 
@@ -95,18 +111,15 @@ if (latency_ns <= 1_000_000) {
 ```
 
 Only slower calls continue to `bpf_ringbuf_reserve()` and `bpf_ringbuf_submit()`.
+We must delete the `starts` entry even when the event is filtered out?
 
-Next question: why must we delete the `starts` entry even when the event is filtered out?
+### Map eviction
 
----
-
-## Production tips
-
-Correct. That leaves a stale entry, and enough stale entries can fill the map.
+That leaves a stale entry, and enough stale entries can fill the map.
 
 Common causes include a program being detached, missed correlation, or unexpected execution paths. Production tracers often add safeguards such as bounded map sizes, LRU maps, and cleanup logic.
 
-Next question: which map type could automatically evict older entries when capacity is reached—`BPF_MAP_TYPE_HASH` or `BPF_MAP_TYPE_LRU_HASH`?
+which map type could automatically evict older entries when capacity is reached—`BPF_MAP_TYPE_HASH` or `BPF_MAP_TYPE_LRU_HASH`?
 
 Correct. `BPF_MAP_TYPE_LRU_HASH` automatically evicts the least recently used entries when the map reaches its maximum size, which helps prevent stale entries from accumulating and filling the map.
 
@@ -508,3 +521,59 @@ The total event size matches the generated C layout
 ```
 
 You can also test pure Go helpers such as `cString()` and latency conversion without loading eBPF.
+
+---
+
+## DEBUGGING
+
+
+```bash
+go tool nm ./opener | grep 'main\.openFile'
+```
+
+Add a PID filter to the uprobe options so only that process instance is traced.
+
+```go
+ex, err := link.OpenExecutable("./opener")
+if err != nil {
+	return err
+}
+
+up, err := ex.Uprobe(
+	"main.openFile",
+	prog,
+	&link.UprobeOptions{
+		PID: targetPID,
+	},
+)
+```
+
+PID-scoped is better for a short, targeted debugging session because it reduces noise.
+
+```
+PID-scoped uprobe → precise, low noise, but breaks on restart
+Global uprobe     → survives restarts, but traces every matching process```
+
+Tradeoff:
+
+```text
+Global uprobe:
++ survives process restarts
++ covers all instances
+- more noise
+- may require filtering in eBPF or user space
+```
+
+- Next scenario: you want global attachment but only events from processes named `opener`. Where is it cheaper to apply that filter: inside the eBPF program or in Go?
+
+filter inside the eBPF program so unwanted events never reach the ring buffer.
+
+For example:
+
+```c
+char comm[16];
+bpf_get_current_comm(comm, sizeof(comm));
+
+if (__builtin_memcmp(comm, "opener", 6) != 0)
+    return 0;
+```
