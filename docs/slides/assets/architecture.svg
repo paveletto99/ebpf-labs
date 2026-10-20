@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" font-family="DejaVu Sans, Verdana, Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">eBPF architecture: loading versus running</title>
+  <desc id="d">A userspace tool loads a program through the bpf system call. In the kernel the verifier checks it and the JIT compiler translates it, then it is attached to a hook. Later, when an event fires at the hook, the program runs and reads or writes a map that the userspace tool can read.</desc>
+  <defs>
+    <marker id="load" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0b3d91"/></marker>
+    <marker id="run" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a33c00"/></marker>
+  </defs>
+
+  <rect width="1200" height="540" fill="#ffffff"/>
+
+  <!-- zones -->
+  <rect x="0" y="0" width="1200" height="190" fill="#f1f1f1"/>
+  <rect x="0" y="190" width="1200" height="350" fill="#fff4e0"/>
+  <line x1="0" y1="190" x2="1200" y2="190" stroke="#111" stroke-width="4"/>
+  <text x="16" y="30" font-size="24" font-weight="700" fill="#111">USER SPACE</text>
+  <text x="1184" y="528" font-size="24" font-weight="700" fill="#111" text-anchor="end">KERNEL SPACE</text>
+
+  <!-- userspace tool -->
+  <rect x="40" y="50" width="760" height="110" rx="10" fill="#fff" stroke="#111" stroke-width="3"/>
+  <text x="420" y="92" font-size="28" font-weight="700" text-anchor="middle" fill="#111">Your tool (for example bpftrace)</text>
+  <text x="420" y="132" font-size="24" text-anchor="middle" fill="#111">compiles, loads, and reads results</text>
+
+  <!-- kernel boxes -->
+  <rect x="40" y="260" width="200" height="110" rx="10" fill="#fff" stroke="#0b3d91" stroke-width="4"/>
+  <text x="140" y="308" font-size="28" font-weight="700" text-anchor="middle" fill="#111">Verifier</text>
+  <text x="140" y="344" font-size="22" text-anchor="middle" fill="#111">checks safety</text>
+
+  <rect x="300" y="260" width="200" height="110" rx="10" fill="#fff" stroke="#0b3d91" stroke-width="4"/>
+  <text x="400" y="308" font-size="28" font-weight="700" text-anchor="middle" fill="#111">JIT</text>
+  <text x="400" y="344" font-size="22" text-anchor="middle" fill="#111">to machine code</text>
+
+  <rect x="560" y="260" width="240" height="110" rx="10" fill="#fff" stroke="#a33c00" stroke-width="4"/>
+  <text x="680" y="308" font-size="28" font-weight="700" text-anchor="middle" fill="#111">eBPF program</text>
+  <text x="680" y="344" font-size="22" text-anchor="middle" fill="#111">attached to a hook</text>
+
+  <rect x="560" y="430" width="240" height="80" rx="10" fill="#fff" stroke="#a33c00" stroke-width="4"/>
+  <text x="680" y="466" font-size="28" font-weight="700" text-anchor="middle" fill="#111">Kernel event</text>
+  <text x="680" y="496" font-size="22" text-anchor="middle" fill="#111">syscall, packet, ...</text>
+
+  <rect x="900" y="260" width="270" height="110" rx="10" fill="#fff" stroke="#111" stroke-width="4"/>
+  <text x="1035" y="308" font-size="28" font-weight="700" text-anchor="middle" fill="#111">Map</text>
+  <text x="1035" y="344" font-size="22" text-anchor="middle" fill="#111">shared state</text>
+
+  <!-- LOAD TIME: blue, solid -->
+  <path d="M140,160 L140,258" stroke="#0b3d91" stroke-width="5" fill="none" marker-end="url(#load)"/>
+  <text x="156" y="205" font-size="22" font-weight="700" fill="#0b3d91" dy="22">① load via bpf()</text>
+  <path d="M240,315 L298,315" stroke="#0b3d91" stroke-width="5" fill="none" marker-end="url(#load)"/>
+  <path d="M500,315 L558,315" stroke="#0b3d91" stroke-width="5" fill="none" marker-end="url(#load)"/>
+  <text x="270" y="400" font-size="22" font-weight="700" fill="#0b3d91" text-anchor="middle">② verify, then ③ compile and attach</text>
+
+  <!-- RUN TIME: orange, dashed -->
+  <path d="M680,428 L680,372" stroke="#a33c00" stroke-width="5" stroke-dasharray="14 8" fill="none" marker-end="url(#run)"/>
+  <text x="700" y="405" font-size="22" font-weight="700" fill="#a33c00">④ event fires</text>
+  <path d="M802,315 L898,315" stroke="#a33c00" stroke-width="5" stroke-dasharray="14 8" fill="none" marker-start="url(#run)" marker-end="url(#run)"/>
+  <text x="850" y="298" font-size="22" font-weight="700" fill="#a33c00" text-anchor="middle">⑤</text>
+  <path d="M1035,258 L1035,105 L802,105" stroke="#a33c00" stroke-width="5" stroke-dasharray="14 8" fill="none" marker-end="url(#run)"/>
+  <text x="1015" y="150" font-size="22" font-weight="700" fill="#a33c00" text-anchor="end">⑥ read results</text>
+
+  <text x="1035" y="400" font-size="22" font-weight="700" fill="#a33c00" text-anchor="middle">⑤ program reads/writes</text>
+
+  <!-- legend -->
+  <line x1="40" y1="450" x2="100" y2="450" stroke="#0b3d91" stroke-width="5"/>
+  <text x="115" y="457" font-size="22" font-weight="700" fill="#0b3d91">Load time (once)</text>
+  <line x1="40" y1="495" x2="100" y2="495" stroke="#a33c00" stroke-width="5" stroke-dasharray="14 8"/>
+  <text x="115" y="502" font-size="22" font-weight="700" fill="#a33c00">Run time (each event)</text>
+</svg>

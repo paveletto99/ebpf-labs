@@ -1,0 +1,39 @@
+#!/usr/bin/env bpftrace
+// Demo tracer: show failed openat() calls (ENOENT) made by one process.
+//
+// Usage:  sudo bpftrace missing-files.bt <PID>
+// Target: bpftrace v0.23.x (uses `args.field` and the two-argument delete()).
+//
+// Scope: this traces the openat system call only. It does not see other ways
+// a program may open files (open, openat2, io_uring, ...). The entry probe
+// saves the filename keyed by thread ID; the exit probe reads the return value.
+
+BEGIN
+{
+	if ($1 == 0) {
+		printf("usage: sudo bpftrace missing-files.bt <PID>\n");
+		exit();
+	}
+	printf("Tracing failed openat() calls for PID %d... Ctrl+C to stop.\n", $1);
+}
+
+tracepoint:syscalls:sys_enter_openat
+/pid == $1/
+{
+	@fs_openat_path[tid] = str(args.filename);
+}
+
+tracepoint:syscalls:sys_exit_openat
+/pid == $1 && has_key(@fs_openat_path, tid)/
+{
+	// -2 is -ENOENT: "No such file or directory".
+	if (args.ret == -2) {
+		printf("%-10s ENOENT  %s\n", comm, @fs_openat_path[tid]);
+	}
+	delete(@fs_openat_path, tid);
+}
+
+END
+{
+	clear(@fs_openat_path);
+}

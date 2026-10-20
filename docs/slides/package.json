@@ -1,0 +1,19 @@
+{
+  "name": "ebpf-programming-the-linux-kernel-slides",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Linux Day talk: eBPF: Programming the Linux Kernel (Marp slides and live demo)",
+  "scripts": {
+    "preview": "marp --server --allow-local-files --html .",
+    "build": "mkdir -p dist && marp slides.md --pdf --allow-local-files --html -o dist/slides.pdf",
+    "build:html": "mkdir -p dist && rm -rf dist/assets && cp -R assets dist/assets && marp slides.md --allow-local-files --html -o dist/slides.html",
+    "build:print-html": "mkdir -p dist && rm -rf dist/assets && cp -R assets dist/assets && marp slides.md --template bare --allow-local-files --html -o dist/slides-print.html"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@marp-team/marp-cli": "4.5.1"
+  }
+}

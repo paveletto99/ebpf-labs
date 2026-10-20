@@ -22,3 +22,6 @@ target
 
 # binary artifacts
 watcher
+
+# Node
+node_modules/

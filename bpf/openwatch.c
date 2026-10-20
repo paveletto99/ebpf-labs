@@ -99,13 +99,14 @@ int handle_exit(struct exit_args *ctx)
     __u64 latency_ns =
         bpf_ktime_get_ns() - state->start_ns;
 
-    // int i = 1000000;
+    // Only emit calls slower than 1 ms
+    int i = 1000000;
 
-    // if (latency_ns <= i)
-    // {
-    //     bpf_map_delete_elem(&starts, &tid);
-    //     return 0;
-    // }
+    if (latency_ns <= i)
+    {
+        bpf_map_delete_elem(&starts, &tid);
+        return 0;
+    }
 
     struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e)
