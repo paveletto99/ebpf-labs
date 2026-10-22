@@ -51,7 +51,7 @@ style: |
 
 ## Safely running small programs inside Linux
 
-Linux Day · [Speaker name]
+Linux Day · Paolo Giovannini
 
 <!--
 Timing: 0:00-0:30 (0.5 min). Total talk 25 min plus 5 min questions.

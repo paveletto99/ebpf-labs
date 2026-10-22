@@ -30,7 +30,7 @@ tracepoint:syscalls:sys_exit_openat
 	if (args.ret == -2) {
 		printf("%-10s ENOENT  %s\n", comm, @fs_openat_path[tid]);
 	}
-	delete(@fs_openat_path, tid);
+	$fs_openat_deleted = delete(@fs_openat_path, tid);
 }
 
 END
